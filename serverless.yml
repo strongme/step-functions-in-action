@@ -1,0 +1,78 @@
+org: strongme
+app: serverless-in-action
+service: step-functions-in-action
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - "states:StartExecution"
+            - "states:SendTaskSuccess"
+            - "secretsmanager:GetSecretValue"
+          Resource:
+            - "*"
+
+functions:
+  generateAnnotation:
+    handler: handler.generateAnnotation
+  startAnnotation:
+    handler: handler.startAnnotation
+    events:
+      - httpApi:
+          path: /startAnnotation
+          method: post
+    environment:
+      state_machine_arn: ${self:resources.Outputs.AnnotationAndReview.Value}
+  submitToReview:
+    handler: handler.submitToReview
+    description: submit annotation to review
+  endAnnotation:
+    handler: handler.endAnnotation
+    description: End of annotation
+  confirmAnnotation:
+    handler: handler.confirmAnnotation
+    events:
+      - httpApi:
+          path: /confirmAnnotation
+          method: post
+
+stepFunctions:
+  stateMachines:
+    annotationAndReview:
+      name: AnnotationAndReview
+      definition:
+        Comment: "Generate annotation data"
+        StartAt: GenerateAnnotation
+        States:
+          GenerateAnnotation:
+            Type: Task
+            Resource: "arn:aws:lambda:${aws:region}:${aws:accountId}:function:${self:service}-${sls:stage}-generateAnnotation"
+            Next: SubmitToReview
+          SubmitToReview:
+            Type: Task
+            Resource: "arn:aws:states:::lambda:invoke.waitForTaskToken"
+            Parameters:
+              FunctionName: "arn:aws:lambda:${aws:region}:${aws:accountId}:function:${self:service}-${sls:stage}-submitToReview"
+              Payload:
+                token.$: $$.Task.Token # 进入该function的input将带有token属性
+                input.$: $
+            Next: EndAnnotation
+          EndAnnotation:
+            Type: Task
+            Resource: "arn:aws:lambda:${aws:region}:${aws:accountId}:function:${self:service}-${sls:stage}-endAnnotation"
+            End: true
+
+resources:
+  Outputs:
+    AnnotationAndReview:
+      Description: The ARN of the state machine
+      Value: !GetAtt AnnotationAndReview.Arn
+
+plugins:
+  - serverless-step-functions
